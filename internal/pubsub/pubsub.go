@@ -8,11 +8,18 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+type Acktype int
 type SimpleQueueType int
 
 const (
 	Durable SimpleQueueType = iota
 	Transient
+)
+
+const (
+	Ack Acktype = iota
+	NackDiscard
+	NackRequeue
 )
 
 // PublishJSON publishes a JSON-encoded value to the given exchange with the given routing key.
@@ -39,7 +46,7 @@ func SubscribeJSON[T any](
 	queueName,
 	key string,
 	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
-	handler func(T),
+	handler func(T) Acktype,
 ) error {
 	// Call DeclareAndBind to make sure that the given queue exists
 	// and is bound to the exchange
@@ -56,6 +63,7 @@ func SubscribeJSON[T any](
 
 	// start a new goroutine that ranges over the channel of deliveries
 	go func() {
+		defer ch.Close()
 		for msg := range msgs {
 			var val T
 			// unmarshal the body into generic T type
@@ -65,8 +73,20 @@ func SubscribeJSON[T any](
 				continue
 			}
 			// call the handler with the unmarshaled value
-			handler(val)
-			msg.Ack(false)
+			ackType := handler(val)
+			switch ackType {
+			case Ack:
+				fmt.Println("Ack: Processed Successfully")
+				msg.Ack(false)
+			case NackRequeue:
+				fmt.Println("NackRequeue: Not processed, requeue")
+				msg.Nack(false, true)
+			case NackDiscard:
+				fmt.Println("NackDiscard: Not processed, discard")
+				msg.Nack(false, false)
+			default:
+				fmt.Println("Err: Unknown ack type")
+			}
 		}
 	}()
 	return nil
@@ -87,12 +107,12 @@ func DeclareAndBind(
 
 	// the channel is created, now declare a new queue
 	queue, err := ch.QueueDeclare(
-		queueName,
-		queueType == Durable,
-		queueType == Transient,
-		queueType == Transient,
-		false,
-		nil,
+		queueName,              // name
+		queueType == Durable,   // durable
+		queueType == Transient, // delete when unused
+		queueType == Transient, // exclusive
+		false,                  // no-wait
+		amqp.Table{"x-dead-letter-exchange": "peril_dlx"}, // args
 	)
 	if err != nil {
 		return nil, amqp.Queue{}, err
