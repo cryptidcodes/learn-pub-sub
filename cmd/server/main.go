@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 
@@ -33,9 +34,19 @@ func main() {
 	}
 	defer ch.Close()
 
-	gamelogic.PrintServerHelp()
+	err = pubsub.SubscribeGob(
+		connection,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		routing.GameLogSlug+".*",
+		pubsub.Durable,
+		handlerLogs(),
+	)
+	if err != nil {
+		log.Fatalf("could not starting consuming logs: %v", err)
+	}
 
-	pubsub.DeclareAndBind(connection, routing.ExchangePerilTopic, routing.GameLogSlug, routing.GameLogSlug, pubsub.Durable)
+	gamelogic.PrintServerHelp()
 
 	// start an infinite REPL
 	for i := 0; i == 0; {

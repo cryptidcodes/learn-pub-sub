@@ -41,19 +41,24 @@ func main() {
 	}
 
 	// declare a queue and channel for move commands from other players
-	ch, err := connection.Channel()
+	moveCh, err := connection.Channel()
 	if err != nil {
 		fmt.Println("Failed to open a channel:", err)
 		return
 	}
-	err = pubsub.SubscribeJSON(connection, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username), fmt.Sprintf("%s.*", routing.ArmyMovesPrefix), pubsub.Transient, handlerMove(gs, ch))
+	err = pubsub.SubscribeJSON(connection, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username), fmt.Sprintf("%s.*", routing.ArmyMovesPrefix), pubsub.Transient, handlerMove(gs, moveCh))
 	if err != nil {
 		fmt.Println("Failed to subscribe to move messages:", err)
 		return
 	}
 
-	// declare a queue for war recognitions from other players
-	err = pubsub.SubscribeJSON(connection, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, fmt.Sprintf("%s.*", routing.WarRecognitionsPrefix), pubsub.Durable, handlerWar(gs))
+	// declare a queue and channel for war recognitions from other players
+	warCh, err := connection.Channel()
+	if err != nil {
+		fmt.Println("Failed to open a channel:", err)
+		return
+	}
+	err = pubsub.SubscribeJSON(connection, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, fmt.Sprintf("%s.*", routing.WarRecognitionsPrefix), pubsub.Durable, handlerWar(gs, warCh))
 	if err != nil {
 		fmt.Println("Failed to subscribe to war messages:", err)
 		return

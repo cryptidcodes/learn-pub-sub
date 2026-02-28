@@ -1,7 +1,8 @@
 package pubsub
 
 import (
-	"context"
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 
@@ -22,70 +23,96 @@ const (
 	NackRequeue
 )
 
-// PublishJSON publishes a JSON-encoded value to the given exchange with the given routing key.
-func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
-	// marshal the val to JSON bytes
-	bytes, err := json.Marshal(val)
-	if err != nil {
-		return err
-	}
-	// use the channel's .PublishWithContext method with the routhing key
-	err = ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        bytes,
-	})
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func SubscribeJSON[T any](
 	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
-	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+	queueType SimpleQueueType,
 	handler func(T) Acktype,
 ) error {
-	// Call DeclareAndBind to make sure that the given queue exists
-	// and is bound to the exchange
+	return subscribe[T](
+		conn,
+		exchange,
+		queueName,
+		key,
+		queueType,
+		handler,
+		func(data []byte) (T, error) {
+			var target T
+			err := json.Unmarshal(data, &target)
+			return target, err
+		},
+	)
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType,
+	handler func(T) Acktype,
+) error {
+	return subscribe[T](
+		conn,
+		exchange,
+		queueName,
+		key,
+		queueType,
+		handler,
+		func(data []byte) (T, error) {
+			buffer := bytes.NewBuffer(data)
+			decoder := gob.NewDecoder(buffer)
+			var target T
+			err := decoder.Decode(&target)
+			return target, err
+		},
+	)
+}
+
+func subscribe[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType,
+	handler func(T) Acktype,
+	unmarshaller func([]byte) (T, error),
+) error {
 	ch, queue, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not declare and bind queue: %v", err)
 	}
 
-	// get a new chan of amqp.Delivery structs by using the channel.Consume method
-	msgs, err := ch.Consume(queue.Name, "", false, false, false, false, nil)
+	msgs, err := ch.Consume(
+		queue.Name, // queue
+		"",         // consumer
+		false,      // auto-ack
+		false,      // exclusive
+		false,      // no-local
+		false,      // no-wait
+		nil,        // args
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not consume messages: %v", err)
 	}
 
-	// start a new goroutine that ranges over the channel of deliveries
 	go func() {
 		defer ch.Close()
 		for msg := range msgs {
-			var val T
-			// unmarshal the body into generic T type
-			err = json.Unmarshal(msg.Body, &val)
+			target, err := unmarshaller(msg.Body)
 			if err != nil {
-				fmt.Println("Failed to unmarshal message:", err)
+				fmt.Printf("could not unmarshal message: %v\n", err)
 				continue
 			}
-			// call the handler with the unmarshaled value
-			ackType := handler(val)
-			switch ackType {
+			switch handler(target) {
 			case Ack:
-				fmt.Println("Ack: Processed Successfully")
 				msg.Ack(false)
-			case NackRequeue:
-				fmt.Println("NackRequeue: Not processed, requeue")
-				msg.Nack(false, true)
 			case NackDiscard:
-				fmt.Println("NackDiscard: Not processed, discard")
 				msg.Nack(false, false)
-			default:
-				fmt.Println("Err: Unknown ack type")
+			case NackRequeue:
+				msg.Nack(false, true)
 			}
 		}
 	}()
