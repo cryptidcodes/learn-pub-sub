@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 
 	"github.com/cryptidcodes/learn-pub-sub/internal/gamelogic"
 	"github.com/cryptidcodes/learn-pub-sub/internal/pubsub"
@@ -99,7 +100,36 @@ func main() {
 			case "help":
 				gamelogic.PrintClientHelp()
 			case "spam":
-				fmt.Println("Spamming not allowed yet!")
+				if len(input) <= 1 {
+					fmt.Println("Usage: spam <number>")
+					return
+				}
+				n, err := strconv.Atoi(input[1])
+				if err != nil {
+					fmt.Println("Input failed to convert to integer")
+					return
+				}
+				fmt.Printf("Spamming %d times!\n", n)
+				for i := 0; i < n; i++ {
+					// use gamelogic.GetMaliciousLog to get a random malicious log message
+					message := gamelogic.GetMaliciousLog()
+					// create a struct with the log message
+					log := routing.GameLog{
+						Message: message,
+					}
+					// create a channel on the connection
+					ch, err := connection.Channel()
+					if err != nil {
+						fmt.Println("Failed to open a channel:", err)
+						return
+					}
+					defer ch.Close()
+					// Publish the log message (a struct) to Rabbit
+					err = pubsub.PublishGob(ch, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", routing.GameLogSlug, username), log)
+					if err != nil {
+						fmt.Println("Failed to publish log message:", err)
+					}
+				}
 			case "quit":
 				gamelogic.PrintQuit()
 				i = 1
